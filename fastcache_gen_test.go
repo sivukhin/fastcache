@@ -29,10 +29,10 @@ func TestGenerationOverflow(t *testing.T) {
 
 	// Do some initial Set/Get demonstrate that this works
 	for i := 0; i < 10; i++ {
-		c.Set(key1, bigVal1)
-		c.Set(key2, bigVal2)
-		getVal(t, c, key1, bigVal1)
-		getVal(t, c, key2, bigVal2)
+		c.Set(key1, bigVal1[:len(bigVal1)-(i%2)])
+		c.Set(key2, bigVal2[:len(bigVal2)-(i%2)])
+		getVal(t, c, key1, bigVal1[:len(bigVal1)-(i%2)])
+		getVal(t, c, key2, bigVal2[:len(bigVal2)-(i%2)])
 		genVal(t, c, uint64(1+i))
 	}
 
@@ -56,7 +56,7 @@ func TestGenerationOverflow(t *testing.T) {
 
 	// This set creates an index where `idx | (b.gen << bucketSizeBits)` == 0
 	// The value is in the cache but is unreadable by Get
-	c.Set(key1, bigVal1)
+	c.Set(key1, bigVal1[:len(bigVal1)-1])
 
 	// The Set above overflowed the bucket's generation. This means that
 	// key2 is still in the cache, but can't get read because key2 has a
@@ -65,22 +65,22 @@ func TestGenerationOverflow(t *testing.T) {
 
 	// This Set creates an index where `(b.gen << bucketSizeBits)>>bucketSizeBits)==0`
 	// The value is in the cache but is unreadable by Get
-	c.Set(key2, bigVal2)
+	c.Set(key2, bigVal2[:len(bigVal2)-1])
 
 	// Ensure generations are working as we expect
 	// NB: Here we skip the 2^24 generation, because the bucket carefully
 	// avoids `generation==0`
 	genVal(t, c, (1<<24)+1)
 
-	getVal(t, c, key1, bigVal1)
-	getVal(t, c, key2, bigVal2)
+	getVal(t, c, key1, bigVal1[:len(bigVal1)-1])
+	getVal(t, c, key2, bigVal2[:len(bigVal2)-1])
 
 	// Do it a few more times to show that this bucket is now unusable
 	for i := 0; i < 10; i++ {
-		c.Set(key1, bigVal1)
-		c.Set(key2, bigVal2)
-		getVal(t, c, key1, bigVal1)
-		getVal(t, c, key2, bigVal2)
+		c.Set(key1, bigVal1[:len(bigVal1)-(i%2)])
+		c.Set(key2, bigVal2[:len(bigVal2)-(i%2)])
+		getVal(t, c, key1, bigVal1[:len(bigVal1)-(i%2)])
+		getVal(t, c, key2, bigVal2[:len(bigVal2)-(i%2)])
 		genVal(t, c, uint64((1<<24)+2+i))
 	}
 }

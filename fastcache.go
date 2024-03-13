@@ -8,7 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	xxhash "github.com/cespare/xxhash/v2"
+	"github.com/cespare/xxhash/v2"
 )
 
 const bucketsCount = 512
@@ -275,7 +275,7 @@ func (b *bucket) cleanLocked() {
 	newItems := 0
 	for _, v := range bm {
 		gen := v >> bucketSizeBits
-		idx := v & ((1 << bucketSizeBits) - 1)
+		idx := v & (maxBucketSize - 1)
 		if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
 			newItems++
 		}
@@ -287,7 +287,7 @@ func (b *bucket) cleanLocked() {
 		bmNew := make(map[uint64]uint64, newItems)
 		for k, v := range bm {
 			gen := v >> bucketSizeBits
-			idx := v & ((1 << bucketSizeBits) - 1)
+			idx := v & (maxBucketSize - 1)
 			if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
 				bmNew[k] = v
 			}
@@ -336,10 +336,58 @@ func (b *bucket) Set(k, v []byte, h uint64) {
 	chunks := b.chunks
 	needClean := false
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	idx := b.idx
 	idxNew := idx + kvLen
 	chunkIdx := idx / chunkSize
 	chunkIdxNew := idxNew / chunkSize
+
+	{
+		// Same cache entries can be overwritten with values of same length multiple times (this can happen in case of "rigid" values like counters, fixed length arrays, etc.)
+		// This case can be easily optimized as we can modify corresponding region in-place without allocating new region in the bucket ring-buffer
+		var (
+			chunk         []byte
+			prevHandleGen uint64
+			prevChunkIdx  uint64
+			prevIdx       uint64
+			bGen          uint64
+			bIdx          uint64
+		)
+		prevHandle := b.m[h]
+		// no entry found
+		if prevHandle == 0 {
+			goto appendEntryLabel
+		}
+
+		// Extra attention required for previous entry generation: we must validate that previous entry is valid and not outdated
+		prevHandleGen = prevHandle >> bucketSizeBits
+		bGen = b.gen
+		bIdx = b.idx
+		if (prevHandleGen+1 == bGen || prevHandleGen == maxGen && bGen == 1) && idx >= bIdx || prevHandleGen == bGen && idx < bIdx {
+			goto appendEntryLabel
+		}
+
+		prevHandle &= maxBucketSize - 1
+
+		prevChunkIdx = prevHandle / chunkSize
+		prevIdx = prevHandle % chunkSize
+		if prevChunkIdx >= uint64(len(chunks)) {
+			goto appendEntryLabel
+		}
+		chunk = chunks[prevChunkIdx]
+		if prevIdx+4+uint64(len(k)+len(v)) >= chunkSize || string(kvLenBuf[:]) != string(chunk[prevIdx:prevIdx+4]) {
+			goto appendEntryLabel
+		}
+		prevIdx += 4
+		copy(chunk[prevIdx:prevIdx+uint64(len(k))], k)
+		prevIdx += uint64(len(k))
+		copy(chunk[prevIdx:prevIdx+uint64(len(v))], v)
+		// as we validated map entry b.m[h] before it is safe to leave it as is because it has correct idx and generation
+		return
+	}
+
+appendEntryLabel:
 	if chunkIdxNew > chunkIdx {
 		if chunkIdxNew >= uint64(len(chunks)) {
 			idx = 0
@@ -371,7 +419,6 @@ func (b *bucket) Set(k, v []byte, h uint64) {
 	if needClean {
 		b.cleanLocked()
 	}
-	b.mu.Unlock()
 }
 
 func (b *bucket) Get(dst, k []byte, h uint64, returnDst bool) ([]byte, bool) {
@@ -383,7 +430,7 @@ func (b *bucket) Get(dst, k []byte, h uint64, returnDst bool) ([]byte, bool) {
 	bGen := b.gen & ((1 << genSizeBits) - 1)
 	if v > 0 {
 		gen := v >> bucketSizeBits
-		idx := v & ((1 << bucketSizeBits) - 1)
+		idx := v & (maxBucketSize - 1)
 		if gen == bGen && idx < b.idx || gen+1 == bGen && idx >= b.idx || gen == maxGen && bGen == 1 && idx >= b.idx {
 			chunkIdx := idx / chunkSize
 			if chunkIdx >= uint64(len(chunks)) {
