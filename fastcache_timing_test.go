@@ -38,6 +38,31 @@ func BenchmarkBigCacheSet(b *testing.B) {
 	})
 }
 
+func BenchmarkBigCacheSetRewrites(b *testing.B) {
+	const items = 1 << 16
+	cfg := bigcache.DefaultConfig(time.Minute)
+	cfg.Verbose = false
+	c, err := bigcache.NewBigCache(cfg)
+	if err != nil {
+		b.Fatalf("cannot create cache: %s", err)
+	}
+	defer c.Close()
+	b.ReportAllocs()
+	b.SetBytes(items)
+	b.RunParallel(func(pb *testing.PB) {
+		k := []byte("\x00\x00\x00\x00")
+		v := []byte("xyza")
+		for pb.Next() {
+			for i := 0; i < items; i++ {
+				k[0]++
+				if err := c.Set(b2s(k), v); err != nil {
+					panic(fmt.Errorf("unexpected error: %s", err))
+				}
+			}
+		}
+	})
+}
+
 func BenchmarkBigCacheGet(b *testing.B) {
 	const items = 1 << 16
 	cfg := bigcache.DefaultConfig(time.Minute)
@@ -141,6 +166,24 @@ func BenchmarkCacheSet(b *testing.B) {
 				if k[0] == 0 {
 					k[1]++
 				}
+				c.Set(k, v)
+			}
+		}
+	})
+}
+
+func BenchmarkCacheRewrites(b *testing.B) {
+	const items = 1 << 16
+	c := New(12 * items)
+	defer c.Reset()
+	b.ReportAllocs()
+	b.SetBytes(items)
+	b.RunParallel(func(pb *testing.PB) {
+		k := []byte("\x00\x00\x00\x00")
+		v := []byte("xyza")
+		for pb.Next() {
+			for i := 0; i < items; i++ {
+				k[0]++
 				c.Set(k, v)
 			}
 		}
